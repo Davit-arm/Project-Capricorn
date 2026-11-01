@@ -48,7 +48,7 @@ tools  = [{
     'type':'function',
     'function':{
         'name':'open_app',
-        'description':'Open an application on the computer',
+        'description':'Open an application on the computer, if you cant find it on disk C then look for it on disk d',
         'parameters':{
             'type':'object',
             'properties':{
