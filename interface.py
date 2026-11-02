@@ -3,21 +3,147 @@ import os
 from PySide6.QtWidgets import QApplication, QPushButton, QVBoxLayout,QHBoxLayout, QWidget,QLabel,QPlainTextEdit,QScrollArea,QFrame
 from PySide6.QtCore import Qt,QPoint,Signal, QEvent
 from PySide6.QtGui import QPainter, QPolygon, QColor, QPen, QFontDatabase, QPixmap
-from logic import generate_response
+import threading
+from logic import Brain
+
+
+class IPanel(QWidget):
+    message_sent = Signal(str)
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.Tool |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint)
+        
+        self.panel_layout = QHBoxLayout(self)
+        self.panel_layout.setSpacing(0)
+        line = QLabel('▌')
+        line.setObjectName('line')
+        self.user_input = QPlainTextEdit()
+        self.user_input.setPlaceholderText("ask Capri something...")
+        self.user_input.setObjectName('input')
+        self.user_input.setMinimumHeight(50)
+        self.setMaximumWidth(365)
+        self.user_input.installEventFilter(self)
+        send_button = QPushButton('↵')
+        send_button.clicked.connect(self.send_message)
+        mic_button = QPushButton('\U0001F3A4\uFE0E')
+        self.panel_layout.addWidget(line, alignment=Qt.AlignmentFlag.AlignTop)
+        self.panel_layout.addWidget(self.user_input)
+        self.panel_layout.addWidget(send_button)
+        self.panel_layout.addWidget(mic_button)
+        self.setStyleSheet('''
+        IPanel {
+            max-height:65px;
+        }
+
+        #line {
+            color:red;
+            padding-right:10px;
+            padding-top:14px;
+            background:transparent;
+        }
+        #input {
+            font-family:'Orbitron';
+            font-size:11px;
+            font-weight:bold;
+            border:none;
+            padding:12px;
+            color:white;
+            background:transparent
+        }
+
+        #input QScrollBar:vertical {
+            background:transparent;
+            width:5px;
+            margin:0;
+        }
+
+        #input QScrollBar::handle:vertical {
+            background:cyan;
+            border-radius:2px;
+            min-height:20px;
+        }
+
+        #input QScrollBar::add-line:vertical,
+        #input QScrollBar::sub-line:vertical {
+            height:0;
+        }
+
+        #input QScrollBar::add-page:vertical,
+        #input QScrollBar::sub-page:vertical{
+            background:transparent;
+        }
+
+        QPushButton {
+            font-size:15px;
+            border:none;
+            width:20px;
+            height:20px;
+            padding:10px;
+            background:transparent;
+            font-weight:bold;
+        }
+
+        QPushButton:hover {
+            background-color:#24404a
+        }
+        
+''')
+    def paintEvent(self,event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        points = QPolygon([
+            QPoint(self.width() - 15, 0),
+            QPoint(0, 0), 
+            QPoint(0, self.height() - 15), 
+            QPoint(15,self.height()), 
+            QPoint(self.width(),self.height()),
+            QPoint(self.width(), 16),
+        ])
+        painter.setBrush(QColor(10, 14, 20, 230))
+        pen=QPen(QColor('cyan'),2)
+        painter.setPen(pen)
+        painter.drawPolygon(points)
+
+    def eventFilter(self, obj, event):
+        if obj == self.user_input and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                self.send_message()
+                return True
+        return super().eventFilter(obj, event)
+    
+    def send_message(self):
+        user_input = self.user_input.toPlainText().strip()
+        self.message_sent.emit(user_input)
+        self.user_input.clear()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.windowHandle().startSystemMove()
+
+
 
 
 
 class TitleBar(QWidget):
-    def __init__(self,main_window):
+    def __init__(self,main_window,input_panel):
         super().__init__()
+        self.input_panel = input_panel
         self.main_window = main_window
         main_layout = QVBoxLayout(self)
-        main_layout.setObjectName("titleBar")
+        self.setObjectName("titleBar")
         title_layout = QHBoxLayout()
         title_layout.setSpacing(0)
         title_layout.setContentsMargins(0,0,0,0)
         logo = QLabel("<span style='font-size:15px; color:cyan'>▌</span> CAPRI")
         logo.setObjectName("logo")
+        input_button = QPushButton('💬')
+        input_button.setObjectName('InputToggle')
+        input_button.setCheckable(True)
+        self.input_button_on = False
+        input_button.clicked.connect(self.open_input_panel)
         status = QLabel("  •  ONLINE")
         status.setObjectName("status")
         close_button = QPushButton("x")
@@ -32,6 +158,7 @@ class TitleBar(QWidget):
         line.setFixedHeight(3)
         line.setStyleSheet("background-color:cyan;")
         title_layout.addWidget(logo)
+        title_layout.addWidget(input_button)
         title_layout.addStretch()
         title_layout.addWidget(status)
         title_layout.addWidget(minimize_button)
@@ -57,7 +184,7 @@ class TitleBar(QWidget):
             background:transparent;
         }
 
-        #closeButton, #minButton {
+        #closeButton, #minButton, #InputToggle {
             border:none;
             background-color: rgba(0, 0, 0, 1%);
             font-size:15px;
@@ -69,6 +196,18 @@ class TitleBar(QWidget):
 
         #minButton {
             font-size:30px;
+        }
+
+        #InputToggle {
+        
+        }
+
+        #InputToggle:hover {
+            background-color:#ff477e
+        }
+
+        #InputToggle:checked {
+            background-color:cyan;
         }
 
         #closeButton:hover {
@@ -89,6 +228,13 @@ class TitleBar(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(0,0,0,5))
 
+    def open_input_panel(self):
+        if self.input_panel.isVisible():
+            self.input_panel.hide()
+        else:
+            self.input_panel.move(self.main_window.mapToGlobal(QPoint(5,self.main_window.height()+10)))
+            self.input_panel.show()
+
 class RPanel(QWidget):
     def __init__(self):
         super().__init__()
@@ -98,10 +244,10 @@ class RPanel(QWidget):
         self.user_prompt.setObjectName('userPrompt')
         title = QLabel('<span style="color:#ff477e; font-size:14px;">Capri    </span>   / ')
         title.setObjectName('title')
-        self.response = QLabel('Dont her me buddy,just call me Capri')
+        self.response = QLabel('Dont her me buddy, just call me Capri')
         self.response.setObjectName('resp')
-        self.response.setMinimumHeight(50)
-        self.response.setMaximumHeight(100)
+        # self.response.setMinimumHeight(50)
+        # self.response.setMaximumHeight(100)
         self.response.setWordWrap(True)
         scroll = QScrollArea()
         scroll.setObjectName('Scroll')
@@ -112,7 +258,6 @@ class RPanel(QWidget):
         self.panel_layout.addWidget(self.user_prompt)
         self.panel_layout.addWidget(title)
         self.panel_layout.addWidget(scroll)
-        self.panel_layout.addStretch()
         self.setStyleSheet('''
 
 
@@ -189,148 +334,81 @@ class RPanel(QWidget):
         painter.drawPolygon(points)
 
 
-class IPanel(QWidget):
-    message_sent = Signal(str)
-    def __init__(self):
-        super().__init__()
-        self.panel_layout = QHBoxLayout(self)
-        self.panel_layout.setSpacing(0)
-        line = QLabel('▌')
-        line.setObjectName('line')
-        self.user_input = QPlainTextEdit()
-        self.user_input.setPlaceholderText("ask Capri something...")
-        self.user_input.setObjectName('input')
-        self.user_input.setMinimumHeight(50)
-        self.user_input.installEventFilter(self)
-        send_button = QPushButton('↵')
-        send_button.clicked.connect(self.send_message)
-        mic_button = QPushButton('\U0001F3A4\uFE0E')
-        self.panel_layout.addWidget(line, alignment=Qt.AlignmentFlag.AlignTop)
-        self.panel_layout.addWidget(self.user_input)
-        self.panel_layout.addWidget(send_button)
-        self.panel_layout.addWidget(mic_button)
-        self.setStyleSheet('''
-        IPanel {
-            max-height:65px;
-        }
 
-        #line {
-            color:red;
-            padding-right:10px;
-            padding-top:14px;
-            background:transparent;
-        }
-        #input {
-            font-family:'Orbitron';
-            font-size:11px;
-            font-weight:bold;
-            border:none;
-            padding:12px;
-            color:white;
-            background:transparent
-        }
 
-        #input QScrollBar:vertical {
-            background:transparent;
-            width:5px;
-            margin:0;
-        }
 
-        #input QScrollBar::handle:vertical {
-            background:cyan;
-            border-radius:2px;
-            min-height:20px;
-        }
+# class IBlock(QWidget):
+#     message_sent = Signal(str)
+#     def __init__(self):
+#         super().__init__()
+#         layout = QVBoxLayout(self)
+#         close_button = QPushButton("x")
+#         close_button.setObjectName("closeButton")
+#         layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+#         close_button.clicked.connect(self.close)
+#         self.input_panel = IPanel()
+#         self.input_panel.message_sent.connect(self.message_sent)
+#         layout.addWidget(self.input_panel)
+#         self.setStyleSheet('''
+#         #closeButton {
+#             border:none;
+#             background-color: rgba(0, 0, 0, 1%);
+#             font-size:15px;
+#             min-height:30px;
+#             min-width:30px;
+#             font-weight:bold;
+#         }
+# ''')
 
-        #input QScrollBar::add-line:vertical,
-        #input QScrollBar::sub-line:vertical {
-            height:0;
-        }
+#     def mousePressEvent(self, event):
+#         if event.button() == Qt.MouseButton.LeftButton:
+#             self.window().windowHandle().startSystemMove()
 
-        #input QScrollBar::add-page:vertical,
-        #input QScrollBar::sub-page:vertocal{
-            background:transparent;
-        }
-
-        QPushButton {
-            font-size:15px;
-            border:none;
-            width:20px;
-            height:20px;
-            padding:10px;
-            background:transparent;
-            font-weight:bold;
-        }
-
-        QPushButton:hover {
-            background-color:#24404a
-        }
-        
     
-''')
-    def paintEvent(self,event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        points = QPolygon([
-            QPoint(self.width() - 15, 0),
-            QPoint(0, 0), 
-            QPoint(0, self.height() - 15), 
-            QPoint(15,self.height()), 
-            QPoint(self.width(),self.height()),
-            QPoint(self.width(), 16),
-        ])
-        painter.setBrush(QColor(10, 14, 20, 230))
-        pen=QPen(QColor('cyan'),2)
-        painter.setPen(pen)
-        painter.drawPolygon(points)
 
-    def eventFilter(self, obj, event):
-        if obj == self.user_input and event.type() == QEvent.KeyPress:
-            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-                self.send_message()
-                return True
-        return super().eventFilter(obj, event)
-
-    def send_message(self):
-        user_input = self.user_input.toPlainText().strip()
-        self.message_sent.emit(user_input)
-        self.user_input.clear()
 
 class CapriInterface(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Capri Interface")
-        self.resize(400, 600)
+        self.resize(300, 400)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10,10,10,10)
         main_layout.setSpacing(30)
+        self.ai = Brain()
+        self.busy = False
+        self.ai.status.connect(self.change_expression)
+        self.ai.response.connect(self.display_response)
+        self.expressions = {
+            'open_app':'imgs/looking.png',
+            'search_web':'imgs/searching.png',
+            'idle':'imgs/idle.png'
+        }
 
-
-        title_bar = TitleBar(self)
-        main_layout.addWidget(title_bar)
+        
 
         response_block = QVBoxLayout()
         response_block.setSpacing(10)
-        main_layout.addLayout(response_block)
+        
 
         self.response_panel = RPanel()
         self.response_panel.setMinimumHeight(100)
         self.response_panel.setMaximumHeight(300)
-        response_block.addWidget(self.response_panel,stretch=1)
 
-        capri = QLabel()
-        pixmap = QPixmap('imgs/idle.png').scaled(400,700,Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        capri.setPixmap(pixmap)
-        capri.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        capri.setMaximumHeight(400)
-        capri.setMinimumHeight(200)
-        capri.setStyleSheet("""
+
+        self.capri = QLabel()
+        self.pixmap = QPixmap('imgs/idle.png').scaled(350,700,Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.capri.setPixmap(self.pixmap)
+        self.capri.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.capri.setMaximumHeight(300)
+        self.capri.setMinimumHeight(200)
+        self.capri.setStyleSheet("""
         background-color: #101722;
         border:2px solid #ff477e;
         """)
-        main_layout.addWidget(capri)
+
 
         # input_panel = QHBoxLayout()
         # self.input_field = QLineEdit()
@@ -345,10 +423,16 @@ class CapriInterface(QWidget):
         # input_panel.addWidget(mic_button)
         # main_layout.addLayout(input_panel)
 
+
         self.input_panel = IPanel()
+        title_bar = TitleBar(self,self.input_panel)
         self.input_panel.message_sent.connect(self.process_user_input)
-        main_layout.addWidget(self.input_panel)
-    
+        # main_layout.addWidget(self.input_panel)
+
+        main_layout.addWidget(title_bar)
+        response_block.addWidget(self.response_panel) #stretch=1
+        main_layout.addLayout(response_block)
+        main_layout.addWidget(self.capri)
 
         self.setStyleSheet("""
         QWidget {
@@ -379,15 +463,31 @@ class CapriInterface(QWidget):
             padding:12px;
             color:white;
         }
+
         
 
         """)
 
-    def process_user_input(self, message):
-        self.response_panel.user_prompt.setText(f'YOU: {message}')
-        QApplication.processEvents()
-        response = generate_response(message)
+    def change_expression(self,status):
+        if status not in self.expressions:
+            return
+        self.pixmap = QPixmap(self.expressions[status]).scaled(400,700,Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.capri.setPixmap(self.pixmap)
+
+
+    def display_response(self,response):
         self.response_panel.response.setText(response)
+        self.busy = False
+
+    def process_user_input(self, message):
+        if self.busy:
+            return
+        self.busy = True
+        self.response_panel.user_prompt.setText(f'YOU: {message}')
+        threading.Thread(target=self.ai.generate_response,args=(message,), daemon=True).start()
+        
+        
+        # self.response_panel.response.setText(response)
 
 
 # QPushButton {

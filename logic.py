@@ -1,4 +1,5 @@
 from groq import Groq
+from PySide6.QtCore import QObject, QThread, Signal
 from dotenv import load_dotenv
 import os
 import json
@@ -6,120 +7,152 @@ from tools import *
 load_dotenv()
 
 client = Groq(api_key=os.getenv("groq"))
-
 messages = [{
-    'role':'system',
-    'content':'''You are capricorn from cyberpunk edgerunners 2,
-    you are a digital personality construct developed by Arasaka,
-    and you are an assistant,dont use markdown,and in the response just say what you are saying and not what you are doing or what the background is,
-    copy her personality and use some slangs from the game
-    '''
-}]
+            'role':'system',
+            'content':'''You are capricorn from cyberpunk edgerunners 2,
+            you are a digital personality construct developed by Arasaka,
+            and you are an assistant,dont use markdown,and in the response just say what you are saying and not what you are doing or what the background is,
+            copy her personality and use some slangs from the game
+            '''
+        }]
 
-tools  = [{
-    'type':'function',
-    'function': {
-        'name':'get_current_time',
-        'description':"Get the current computer's local time in HH:MM:SS format",
-        'parameters':{
-            'type':'object',
-            'properties':{},
-            'required':[]
-        }
-    }
-},
-{
-    'type':'function',
-    'function':{
-        'name':'search_web',
-        'description':'Search the web for a query and returns the top 5 results',
-        'parameters':{
-            'type':'object',
-            'properties':{
-                'query':{
-                    'type':'string',
-                    'description':'The query to search for'
+class Brain(QObject):
+    status = Signal(str)
+    response = Signal(str)
+    def __init__(self):
+        super().__init__()
+
+        self.tools  = [{
+            'type':'function',
+            'function': {
+                'name':'get_current_time',
+                'description':"Get the current computer's local time in HH:MM:SS format",
+                'parameters':{
+                    'type':'object',
+                    'properties':{},
+                    'required':[]
                 }
-            },
-            'required':['query']
-        }
-    }
-},{
-    'type':'function',
-    'function':{
-        'name':'open_app',
-        'description':'Open an application on the computer, if you cant find it on disk C then look for it on disk d',
-        'parameters':{
-            'type':'object',
-            'properties':{
-                'app':{
-                    'type':'string',
-                    'description': 'The name of the application to open'
+            }
+        },
+        {
+            'type':'function',
+            'function':{
+                'name':'search_web',
+                'description':'Search the web for a query and returns the top 5 results',
+                'parameters':{
+                    'type':'object',
+                    'properties':{
+                        'query':{
+                            'type':'string',
+                            'description':'The query to search for'
+                        }
+                    },
+                    'required':['query']
                 }
-            },
-            'required':['app']
+            }
+        },{
+            'type':'function',
+            'function':{
+                'name':'open_app',
+                'description':'Open an application on the computer, if you cant find it on disk C then look for it on disk d',
+                'parameters':{
+                    'type':'object',
+                    'properties':{
+                        'app':{
+                            'type':'string',
+                            'description': 'The name of the application to open'
+                        }
+                    },
+                    'required':['app']
+                }
+            }
+        },{
+            'type':'function',
+            'function':{
+                'name':'get_current_date',
+                'description':"Get the current computer's local date in YYYY-MM-DD format",
+                'parameters':{
+                    'type':'object',
+                    'properties':{},
+                    'required':[]
+                }
+            }
         }
-    }
-},{
-    'type':'function',
-    'function':{
-        'name':'get_current_date',
-        'description':"Get the current computer's local date in YYYY-MM-DD format",
-        'parameters':{
-            'type':'object',
-            'properties':{},
-            'required':[]
+
+        ]
+
+        self.available_tools = {
+            'get_current_time':get_current_time,
+            'search_web':search_web,
+            'open_app':open_app,
+            'get_current_date':get_current_date
         }
-    }
-}
-
-]
-
-available_tools = {
-    'get_current_time':get_current_time,
-    'search_web':search_web,
-    'open_app':open_app,
-    'get_current_date':get_current_date
-}
 
 
-def generate_response(prompt):
-    messages.append({'role':'user','content':prompt})
-    for _ in range(5):
-        response = client.chat.completions.create(
-            model='openai/gpt-oss-120b',
-            messages=messages,
-            tools=tools,
-            tool_choice='auto'
-        )
-        message = response.choices[0].message
+    def generate_response(self,prompt):
+        messages.append({'role':'user','content':prompt})
+        for _ in range(5):
+            response = client.chat.completions.create(
+                model='openai/gpt-oss-120b',
+                messages=messages,
+                tools=self.tools,
+                tool_choice='auto'
+            )
+            message = response.choices[0].message
 
-        if not message.tool_calls:
-            answer = message.content or "Couldn't generate a response."
-            messages.append({'role':'assistant','content':answer})
-            return answer
+            if not message.tool_calls:
+                answer = message.content or "Couldn't generate a response."
+                messages.append({'role':'assistant','content':answer})
+                self.response.emit(answer)
+                self.status.emit('idle')
+                return
+            
+            messages.append(message)
+            for call in message.tool_calls:
+                name = call.function.name
+                self.status.emit(name)
 
-        messages.append(message)
-        for call in message.tool_calls:
-            name = call.function.name
-            if name not in available_tools:
-                result = f'Error: unknown tool ({name})'
-            else:
-                try:
-                    arguments = json.loads(call.function.arguments)
-                    result = available_tools[name](**arguments)
-                except (ValueError, TypeError) as e:
-                    result =f'Error: invalid arguments for tool {name}: {e}'
+                if name not in self.available_tools:
+                    result = f'Error: unknown tool ({name})'
+                    print(result)
+                else:
+                    try:
+                        arguments = json.loads(call.function.arguments)
+                        result = self.available_tools[name](**arguments)
+                    except (ValueError, TypeError) as e:
+                        result =f'Error: invalid arguments for tool {name}: {e}'
+                        print(result)
+                    except Exception as e:
+                        result =  f'Error: an error occured while executing tool {name}:{e}'
+                        print(result)
+                messages.append({
+                    'role':'tool',
+                    'tool_call_id':call.id,
+                    'content':str(result)
+                })
 
-                except Exception as e:
-                    result =  f'Error: an error occured while executing tool {name}:{e}'
-            messages.append({
-                'role':'tool',
-                'tool_call_id':call.id,
-                'content':str(result)
-            })
-    return 'Failed to generate a response after 5 attempts. please try again'
-    
+        self.status.emit('Error')
+        self.response.emit('Failed to generate a response after 5 attempts. please try again')
+        return 'Failed to generate a response after 5 attempts. please try again'
+
+# class Worker(QThread):
+#     status = Signal(str)
+#     response = Signal(str)
+#     def __init__(self,prompt):
+#         super().__init__()
+#         self.ai = Brain()
+#         self.prompt = prompt
+#         self.ai.status.connect(self.status.emit)
+#     def run(self):
+#         self.status.emit('thinking')
+#         try:
+#             generated = self.ai.generate_response(self.prompt)
+#             self.response.emit(generated)
+#             self.status.emit('idle')
+#         except Exception as e:
+#             self.response.emit('Error')
+#             print(f'error generating the response in worker class: {e}')
+        
 
 
 # while True:
